@@ -20,7 +20,7 @@ pub struct Response<T> {
     /// The attached state of the scraper
     pub state: Option<T>,
     /// the full response Bytes
-    pub bytes: Bytes,
+    // pub bytes: Bytes,
 }
 
 impl<T> Response<T> {
