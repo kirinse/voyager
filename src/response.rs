@@ -19,8 +19,6 @@ pub struct Response<T> {
     pub text: String,
     /// The attached state of the scraper
     pub state: Option<T>,
-    /// the full response Bytes
-    // pub bytes: Bytes,
 }
 
 impl<T> Response<T> {
