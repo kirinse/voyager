@@ -373,6 +373,7 @@ where
             let (mut resp, state) = fut.await?;
             let (status, url, headers) = response_info(&mut resp);
             let text = resp.text().await?;
+            let bytes = resp.bytes().await?;
 
             Ok(Response {
                 depth,
@@ -384,6 +385,7 @@ where
                 response_headers: headers,
                 text,
                 state,
+                bytes,
             })
         });
 

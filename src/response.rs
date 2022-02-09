@@ -1,6 +1,7 @@
 use reqwest::header::HeaderMap;
 use reqwest::{StatusCode, Url};
 use scraper::Html;
+use bytes::Bytes;
 
 /// A successful response for an issued request
 pub struct Response<T> {
@@ -18,6 +19,8 @@ pub struct Response<T> {
     pub text: String,
     /// The attached state of the scraper
     pub state: Option<T>,
+    /// the full response Bytes
+    pub bytes: Bytes,
 }
 
 impl<T> Response<T> {
