@@ -19,6 +19,8 @@ pub struct Response<T> {
     pub text: String,
     /// The attached state of the scraper
     pub state: Option<T>,
+    /// The raw body when body charset can't recognize
+    pub body: Bytes,
 }
 
 impl<T> Response<T> {

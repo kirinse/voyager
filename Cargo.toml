@@ -23,6 +23,7 @@ futures-timer = "3.0"
 thiserror = "1.0"
 robotstxt = "0.3"
 bytes = "1.0"
+mime = "0.3.16"
 
 [[example]]
 name = "reddit"

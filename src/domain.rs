@@ -4,8 +4,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::Result;
+use bytes::Bytes;
 use futures::stream::Stream;
 use futures::{Future, FutureExt};
+use mime::Mime;
 
 use crate::error::{CrawlError, DisallowReason};
 use crate::requests::{
@@ -20,8 +22,8 @@ pub enum DomainListing<T> {
 }
 
 impl<T> DomainListing<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     pub(crate) fn add_request(
         &mut self,
@@ -55,8 +57,8 @@ where
 }
 
 impl<T> Stream for DomainListing<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     type Item = Result<Response<T>>;
 
@@ -118,8 +120,8 @@ impl<T: fmt::Debug> AllowList<T> {
 }
 
 impl<T> AllowList<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     pub(crate) fn add_request(&mut self, req: QueuedRequest<T>) -> Result<(), CrawlError<T>> {
         if let Some(host) = req.request.url().host_str() {
@@ -142,8 +144,8 @@ where
 }
 
 impl<T> Stream for AllowList<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     type Item = Result<Response<T>>;
 
@@ -185,9 +187,9 @@ where
     }
 }
 
-type CrawlRequest<T> = Pin<Box<dyn Future<Output = Result<Response<T>>>>>;
+type CrawlRequest<T> = Pin<Box<dyn Future<Output=Result<Response<T>>>>>;
 
-type RobotsTxtRequest = Pin<Box<dyn Future<Output = Result<RobotsData>>>>;
+type RobotsTxtRequest = Pin<Box<dyn Future<Output=Result<RobotsData>>>>;
 
 pub struct AllowedDomain<T> {
     client: reqwest::Client,
@@ -276,8 +278,8 @@ impl<T: fmt::Debug> AllowedDomain<T> {
 }
 
 impl<T> Stream for AllowedDomain<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     type Item = Result<Response<T>>;
 
@@ -313,7 +315,7 @@ where
                             state: req.state,
                             reason: DisallowReason::RobotsTxt,
                         }
-                        .into())));
+                            .into())));
                     }
                 }
                 pin.robots = Some(robots);
@@ -352,7 +354,7 @@ where
                     state: req.state,
                     reason: DisallowReason::RobotsTxt,
                 }
-                .into())));
+                    .into())));
             }
         }
 
@@ -439,8 +441,8 @@ impl<T> BlockList<T> {
 }
 
 impl<T> BlockList<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     pub(crate) fn add_request(&mut self, req: QueuedRequest<T>) -> Result<(), CrawlError<T>> {
         if req.depth > self.max_depth {
@@ -491,8 +493,8 @@ where
 }
 
 impl<T> Stream for BlockList<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     type Item = Result<Response<T>>;
 
@@ -545,7 +547,7 @@ where
                                     state: req.state,
                                     reason: DisallowReason::RobotsTxt,
                                 }
-                                .into())));
+                                    .into())));
                             }
                         } else {
                             let mut url = req.request.url().clone();
@@ -568,7 +570,7 @@ where
                             request: req.request,
                             state: req.state,
                         }
-                        .into())));
+                            .into())));
                     }
                 } else {
                     let fut = Box::pin(get_response(
@@ -607,8 +609,8 @@ fn get_response<T>(
     request: QueuedRequest<T>,
     skip_non_successful_responses: bool,
 ) -> CrawlRequest<T>
-where
-    T: Unpin + Send + Sync + fmt::Debug + 'static,
+    where
+        T: Unpin + Send + Sync + fmt::Debug + 'static,
 {
     let QueuedRequest {
         request,
@@ -629,13 +631,32 @@ where
                 request_url: Some(request_url),
                 response: resp,
                 state,
-            }
-            .into());
+            }.into());
         }
 
         let (status, url, headers) = response_info(&mut resp);
+        let mut text = String::new();
+        let mut body = Bytes::new();
+        let content_type = headers
+            .get(crate::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<Mime>().ok())
+            .unwrap_or(mime::TEXT_PLAIN_UTF_8);
+        let encoding_name = content_type
+            .get_param(mime::CHARSET)
+            .map(|charset| charset.as_str());
 
-        let text = resp.text_with_charset("ascii").await?;
+        // println!(
+        //     "get_response.content_type: {:?}, subtype = {}, encoding_name = {:?}",
+        //     content_type,
+        //     content_type.subtype(),
+        //     encoding_name
+        // );
+
+        match encoding_name {
+            Some(_) => text = resp.text().await?,
+            None => body = resp.bytes().await?,
+        }
 
         Ok(Response {
             depth,
@@ -645,6 +666,7 @@ where
             response_headers: headers,
             text,
             state,
+            body,
         })
     })
 }

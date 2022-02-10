@@ -146,12 +146,14 @@
 use anyhow::Result;
 use futures::stream::Stream;
 use futures::FutureExt;
-use reqwest::IntoUrl;
+use reqwest::{header, IntoUrl};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use bytes::Bytes;
+use mime::Mime;
 
 mod domain;
 pub mod error;
@@ -160,6 +162,7 @@ pub mod response;
 
 // /// Contains the robots txt types
 pub mod robots;
+
 pub use crate::requests::RequestDelay;
 use crate::requests::{response_info, QueuedRequestBuilder};
 pub use crate::response::Response;
@@ -178,9 +181,9 @@ pub struct Collector<T: Scraper> {
 }
 
 impl<T> Collector<T>
-where
-    T: Scraper,
-    <T as Scraper>::State: fmt::Debug,
+    where
+        T: Scraper,
+        <T as Scraper>::State: fmt::Debug,
 {
     /// Create a new `Collector` that uses the `scraper` for content extraction
     pub fn new(scraper: T, config: CrawlerConfig) -> Self {
@@ -217,10 +220,10 @@ where
 }
 
 impl<T> Stream for Collector<T>
-where
-    T: Scraper + Unpin + 'static,
-    <T as Scraper>::State: Unpin + Send + Sync + 'static,
-    <T as Scraper>::Output: Unpin,
+    where
+        T: Scraper + Unpin + 'static,
+        <T as Scraper>::State: Unpin + Send + Sync + 'static,
+        <T as Scraper>::Output: Unpin,
 {
     type Item = Result<T::Output>;
 
@@ -257,8 +260,9 @@ where
     }
 }
 
-type OutputRequest<T> = Pin<Box<dyn Future<Output = Result<Option<T>>>>>;
-type CrawlRequest<T> = Pin<Box<dyn Future<Output = Result<Response<T>>>>>;
+type OutputRequest<T> = Pin<Box<dyn Future<Output=Result<Option<T>>>>>;
+type CrawlRequest<T> = Pin<Box<dyn Future<Output=Result<Response<T>>>>>;
+
 /// The crawler that is responsible for driving the requests to completion and
 /// providing the crawl response for the `Scraper`.
 pub struct Crawler<T: Scraper> {
@@ -355,27 +359,46 @@ impl<T: Scraper> Crawler<T> {
 }
 
 impl<T> Crawler<T>
-where
-    T: Scraper + Unpin + 'static,
-    <T as Scraper>::State: Unpin + Send + Sync + 'static,
-    <T as Scraper>::Output: Unpin,
+    where
+        T: Scraper + Unpin + 'static,
+        <T as Scraper>::State: Unpin + Send + Sync + 'static,
+        <T as Scraper>::Output: Unpin,
 {
     /// Send a crawling request whose html response and context is returned to
     /// the scraper again
     pub fn crawl<TCrawlFunction, TCrawlFuture>(&mut self, fun: TCrawlFunction)
-    where
-        TCrawlFunction: FnOnce(&reqwest::Client) -> TCrawlFuture,
-        TCrawlFuture: Future<Output = Result<(reqwest::Response, Option<T::State>)>> + 'static,
+        where
+            TCrawlFunction: FnOnce(&reqwest::Client) -> TCrawlFuture,
+            TCrawlFuture: Future<Output=Result<(reqwest::Response, Option<T::State>)>> + 'static,
     {
         let depth = self.current_depth + 1;
         let fut = (fun)(&self.client);
         let fut = Box::pin(async move {
             let (mut resp, state) = fut.await?;
             let (status, url, headers) = response_info(&mut resp);
+            let mut text = String::new();
+            let mut body = Bytes::new();
 
-            let text = resp.text_with_charset("ascii").await?;
-            // let text = resp.text().await?;
+            let content_type = headers
+                .get(crate::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<Mime>().ok())
+                .unwrap_or(mime::TEXT_PLAIN_UTF_8);
+            let encoding_name = content_type
+                .get_param(mime::CHARSET)
+                .map(|charset| charset.as_str());
 
+            // println!(
+            //     "crawl.content_type: {:?}, subtype = {}, encoding_name = {:?}",
+            //     content_type,
+            //     content_type.subtype(),
+            //     encoding_name
+            // );
+
+            match encoding_name {
+                Some(_) => text = resp.text().await?,
+                None => body = resp.bytes().await?,
+            }
 
             Ok(Response {
                 depth,
@@ -387,6 +410,7 @@ where
                 response_headers: headers,
                 text,
                 state,
+                body,
             })
         });
 
@@ -396,9 +420,9 @@ where
     /// Submit a complete crawling job that is driven to completion and directly
     /// returned once finished.
     pub fn complete<TCrawlFunction, TCrawlFuture>(&mut self, fun: TCrawlFunction)
-    where
-        TCrawlFunction: FnOnce(&reqwest::Client) -> TCrawlFuture,
-        TCrawlFuture: Future<Output = Result<Option<T::Output>>> + 'static,
+        where
+            TCrawlFunction: FnOnce(&reqwest::Client) -> TCrawlFuture,
+            TCrawlFuture: Future<Output=Result<Option<T::Output>>> + 'static,
     {
         let fut = (fun)(&self.client);
         self.in_progress_complete_requests.push(Box::pin(fut))
@@ -616,8 +640,8 @@ impl CrawlerConfig {
     /// *NOTE* [`reqwest::Client`] already uses Arc under the hood, so
     /// it's preferable to just `clone` it and pass via [`Self::set_client`]
     #[deprecated(
-        since = "0.2.0",
-        note = "You do not have to wrap the Client it in a `Arc` to reuse it, because it already uses an `Arc` internally. Users should use `set_client` instead."
+    since = "0.2.0",
+    note = "You do not have to wrap the Client it in a `Arc` to reuse it, because it already uses an `Arc` internally. Users should use `set_client` instead."
     )]
     pub fn with_shared_client(mut self, client: std::sync::Arc<reqwest::Client>) -> Self {
         self.client = Some(client.as_ref().clone());
@@ -630,9 +654,9 @@ impl CrawlerConfig {
     }
 
     pub fn disallow_domains<I, T>(mut self, domains: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<String>,
+        where
+            I: IntoIterator<Item=T>,
+            T: Into<String>,
     {
         for domain in domains.into_iter() {
             self.disallowed_domains.insert(domain.into());
@@ -655,9 +679,9 @@ impl CrawlerConfig {
     }
 
     pub fn allow_domains<I, T>(mut self, domains: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<String>,
+        where
+            I: IntoIterator<Item=T>,
+            T: Into<String>,
     {
         for domain in domains.into_iter() {
             self.allowed_domains.insert(domain.into(), None);
@@ -666,9 +690,9 @@ impl CrawlerConfig {
     }
 
     pub fn allow_domains_with_delay<I, T>(mut self, domains: I) -> Self
-    where
-        I: IntoIterator<Item = (T, RequestDelay)>,
-        T: Into<String>,
+        where
+            I: IntoIterator<Item=(T, RequestDelay)>,
+            T: Into<String>,
     {
         for (domain, delay) in domains.into_iter() {
             self.allowed_domains.insert(domain.into(), Some(delay));
